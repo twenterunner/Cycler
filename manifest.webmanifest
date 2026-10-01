@@ -1,0 +1,14 @@
+{
+  "name": "Cycle Forecast",
+  "short_name": "CycleForecast",
+  "description": "Private local migraine and menstruation tracking with transparent probabilistic forecasts.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f8fc",
+  "theme_color": "#f7f8fc",
+  "icons": [
+    {"src":"./icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
