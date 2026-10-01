@@ -41,14 +41,20 @@ The build output is written to `dist/`. The custom Vite build hook copies the ro
 
 ## GitHub Pages
 
-GitHub itself only recognizes Actions workflows when they are stored under `.github/workflows/`. That platform rule is incompatible with a literally folder-free repository.
+The application source remains flat. GitHub requires one special folder for Actions workflows:
 
-To keep this package flat, `deploy-pages.yml` is supplied at root as a workflow template. You have two choices:
+```text
+.github/workflows/deploy-pages.yml
+```
 
-1. Keep the repository fully flat and deploy the generated `dist` output manually, or
-2. On GitHub, create `.github/workflows/` and move `deploy-pages.yml` there to enable automatic Pages deployment.
+To publish correctly:
 
-The application source itself requires no folders.
+1. Push all files to the repository, including `.github/workflows/deploy-pages.yml`.
+2. In GitHub open **Settings → Pages**.
+3. Under **Build and deployment → Source**, select **GitHub Actions**.
+4. Open **Actions** and confirm **Deploy PWA to GitHub Pages** completes successfully.
+
+Do not publish the raw Vite source directly from the repository root. The workflow runs `npm install`, `npm test`, and `npm run build`, then deploys the generated `dist/` output.
 
 ## Private seed data
 
