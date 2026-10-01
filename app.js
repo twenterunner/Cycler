@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-robust-v11';
+  const APP_VERSION = '2026.10.01-phase-v12';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -57,16 +57,16 @@
   // calendar and the 7/30-day Trends outlook. If the user navigates further
   // into the future, expand the horizon only as far as that view requires.
   function forecastHorizonForView(anchor=todayISO()){
-    let horizon=180;
+    let horizon=120;
     if(state.tab==='calendar'){
       const visibleEnd=state.calendarMode==='month'?monthEnd(state.cursor):addDays(startOfWeek(state.cursor),6);
       const ahead=diffDays(visibleEnd,anchor);
-      if(ahead>150) horizon=Math.min(730,Math.max(180,ahead+35));
+      if(ahead>95) horizon=Math.min(730,Math.max(120,ahead+35));
     }
     return horizon;
   }
 
-  function getForecast(anchor=todayISO(),horizon=180){
+  function getForecast(anchor=todayISO(),horizon=120){
     const key = `${state.dataRevision}|${anchor}|${horizon}`;
     if(forecastCache.has(key)) return forecastCache.get(key);
     const value = buildForecast(state.events,anchor,horizon);
@@ -321,6 +321,35 @@
     return{...base,validation,predictiveWeight};
   }
 
+
+  // Phase-state rhythm model used for recurrent future opportunities.
+  // The raw interval model treats a 28-day gap as one very long interval. If a
+  // strong ~14-day rhythm exists, it can instead represent a skipped 14-day
+  // opportunity. This keeps near-term recurrent peaks visible without forcing
+  // the next-event forecast itself to become artificially overconfident.
+  function latentRhythmModel(starts,spectral){
+    const sorted=[...starts].sort();
+    if(sorted.length<5||!spectral?.period)return null;
+    const p=spectral.period,intervals=sorted.slice(1).map((d,i)=>diffDays(d,sorted[i])).filter(x=>x>0);
+    if(intervals.length<4)return null;
+    const multiples=intervals.map(x=>Math.max(1,Math.round(x/p))),residuals=intervals.map((x,i)=>x-multiples[i]*p),robust=robustify(residuals),w=recencyWeights(robust.length,.90);
+    const bias=weightedMean(robust,w),spread=Math.max(1.25,weightedStd(robust,w,bias)),sigma=Math.min(p*.36,spread*Math.sqrt(1+1.25/Math.max(1,robust.length))),totalCycles=multiples.reduce((a,b)=>a+b,0),hitRate=clamp((intervals.length+2)/(totalCycles+3),.45,.94);
+    const coherence=clamp(spectral.coherence||0),prominence=clamp(((spectral.prominence||1)-1.5)/5,0,1),validation=clamp(spectral.validation||0),jitterQuality=clamp(1-sigma/Math.max(2,p*.45),0,1),sample=clamp((sorted.length-4)/7,0,1);
+    const evidence=clamp(.34*coherence+.24*prominence+.24*jitterQuality+.18*validation,0,1),weight=clamp(evidence*sample*.58,0,.46),effectivePeriod=clamp(p+.40*bias,p*.90,p*1.10),drift=Math.max(.55,sigma*.32);
+    return{period:p,effectivePeriod,bias,sigma,drift,hitRate,weight,lastStart:sorted.at(-1),coherence,prominence,validation,jitterQuality};
+  }
+
+  function rhythmRecurringMass(rhythm,anchor,horizon){
+    const out=Array(horizon+1).fill(0);if(!rhythm?.lastStart||!rhythm.effectivePeriod)return out;
+    const elapsed=Math.max(0,diffDays(anchor,rhythm.lastStart)),p=rhythm.effectivePeriod,firstCycle=Math.max(1,Math.floor(elapsed/p));
+    for(let cycle=firstCycle;cycle<=Math.ceil((elapsed+horizon+6*p)/p);cycle++){
+      const center=cycle*p-elapsed;if(center<-6*rhythm.sigma)continue;if(center>horizon+6*rhythm.sigma)break;
+      const sigma=Math.sqrt(rhythm.sigma*rhythm.sigma+Math.max(0,cycle-1)*rhythm.drift*rhythm.drift),mass=rhythm.hitRate;
+      for(let i=0;i<=horizon;i++)out[i]+=mass*normalPdf(i,center,sigma);
+    }
+    return out;
+  }
+
   function fourierSpectrum(starts,minPeriod=7,maxPeriod=60,step=.5){
     const sorted=[...starts].sort();if(sorted.length<4)return[];
     const origin=sorted[0],pos=sorted.map(d=>diffDays(d,origin)),span=Math.max(...pos)+1,series=Array(span).fill(0);pos.forEach(i=>series[i]=1);
@@ -363,7 +392,7 @@
     combined=normalize(combined.map((p,i)=>trust*p+(1-trust)*broad[i]));return normalizeMapArray(combined,anchor);
   }
 
-  function renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMultiplierFn=null){
+  function renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMultiplierFn=null,rhythm=null){
     const all=Array(horizon+1).fill(0),pmf=rec.pmf||[0];let current=mapToArray(nextStart,anchor,horizon);
     for(let cycle=1;cycle<=Math.ceil(horizon/Math.max(1,rec.center))+2;cycle++){
       for(let i=0;i<=horizon;i++)all[i]+=current[i]||0;
@@ -372,6 +401,13 @@
       const sw=clamp(spectral?.predictiveWeight||0,0,1)*(spectral?.period?.18:0);
       for(let i=0;i<=horizon;i++)if(next[i]>0){const d=addDays(anchor,i),sp=spectral?.period?Math.pow(.25+.75*spectralScore(d,spectral),sw):1,ph=phaseMultiplierFn?phaseMultiplierFn(d):1;next[i]*=sp*ph;}
       const after=next.reduce((a,b)=>a+b,0);if(after>0){const scale=target/after;for(let i=0;i<=horizon;i++)next[i]*=scale;}current=next;
+    }
+    if(rhythm?.weight>0){
+      const rm=rhythmRecurringMass(rhythm,anchor,horizon);
+      for(let i=0;i<=horizon;i++){
+        const fade=Math.exp(-i/105),w=rhythm.weight*fade;
+        all[i]=(1-w)*all[i]+w*rm[i];
+      }
     }
     const m=new Map();all.forEach((p,i)=>{if(p>1e-8)m.set(addDays(anchor,i),clamp(p,0,.92));});return m;
   }
@@ -402,10 +438,10 @@
   }
 
   function buildMigraine(events,men,anchor,horizon){
-    const migraines=events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),dur=durationForecast(migraines),rec=recurrenceModel(migraines.map(e=>e.startDate),anchor,horizon),spectral=spectralModel(migraines.map(e=>e.startDate)),baseline=historicalBaseline(migraines,events),phase=migrainePhaseModel(migraines,men.periods);
-    if(migraines.length<2)return{migraines,rec,dur,spectral,baseline,phase,unexplainedFloor:baseline*.2,nextStart:new Map(),startMass:new Map(),occ:new Map(),summary:summary('migraine',new Map(),new Map(),dur.label,'Low',spectral,anchor)};
-    const extra=d=>menstrualPhaseScore(d,men.startMass,phase);extra.strength=phase.strength;const nextStart=blendStartForecast(rec,spectral,anchor,horizon,'migraine',extra),phaseMult=d=>Math.pow(Math.max(.4,menstrualPhaseScore(d,men.startMass,phase)),phase.strength),startMass=renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMult),occ=occurrenceFromStartMass(startMass,dur,anchor,horizon),reliability=clamp(.35+.045*rec.intervals.length+.25*(spectral.predictiveWeight||0)+phase.strength,.35,.90),unexplainedFloor=clamp(baseline*(1-reliability)*.28,.004,.045);
-    migraines.forEach(e=>eachDay(e.startDate,e.endDate).forEach(d=>occ.set(d,1)));return{migraines,rec,dur,spectral,baseline,phase,unexplainedFloor,nextStart,startMass,occ,summary:summary('migraine',nextStart,occ,dur.label,confidence(rec,men.periods.length,'migraine'),spectral,anchor)};
+    const migraines=events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),starts=migraines.map(e=>e.startDate),dur=durationForecast(migraines),rec=recurrenceModel(starts,anchor,horizon),spectral=spectralModel(starts),rhythm=latentRhythmModel(starts,spectral),baseline=historicalBaseline(migraines,events),phase=migrainePhaseModel(migraines,men.periods);
+    if(migraines.length<2)return{migraines,rec,dur,spectral,rhythm,baseline,phase,unexplainedFloor:baseline*.2,nextStart:new Map(),startMass:new Map(),occ:new Map(),summary:summary('migraine',new Map(),new Map(),dur.label,'Low',spectral,anchor)};
+    const extra=d=>menstrualPhaseScore(d,men.startMass,phase);extra.strength=phase.strength;const nextStart=blendStartForecast(rec,spectral,anchor,horizon,'migraine',extra),phaseMult=d=>Math.pow(Math.max(.4,menstrualPhaseScore(d,men.startMass,phase)),phase.strength),startMass=renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMult,rhythm),occ=occurrenceFromStartMass(startMass,dur,anchor,horizon),reliability=clamp(.35+.045*rec.intervals.length+.25*(spectral.predictiveWeight||0)+.12*(rhythm?.weight||0)+phase.strength,.35,.91),unexplainedFloor=clamp(baseline*(1-reliability)*.27,.0035,.04);
+    migraines.forEach(e=>eachDay(e.startDate,e.endDate).forEach(d=>occ.set(d,1)));return{migraines,rec,dur,spectral,rhythm,baseline,phase,unexplainedFloor,nextStart,startMass,occ,summary:summary('migraine',nextStart,occ,dur.label,confidence(rec,men.periods.length,'migraine'),spectral,anchor)};
   }
 
   function buildForecast(events,anchor,horizon=730){
@@ -426,7 +462,7 @@
     if(type==='migraine'){
       if(state.events.some(e=>e.type==='migraine'&&inEvent(date,e)))return['Confirmed migraine event.'];
       const r=['Probability is based mainly on conditional time since the last event and the observed interval distribution.'];
-      if(fc.mig.spectral?.predictiveWeight>.01)r.push('A Fourier rhythm modifier contributes only to the extent it improved earlier held-out predictions.');
+      if(fc.mig.spectral?.predictiveWeight>.01)r.push('A validated Fourier rhythm contributes to timing; recurrent future peaks use a phase-state model whose uncertainty widens with time.');
       if(fc.mig.phase?.strength>.01)r.push('The menstruation timing relationship contributes with small-sample shrinkage.');
       r.push('Observed duration is folded into the probability of migraine being active on this date.');return r;
     }
