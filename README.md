@@ -48,3 +48,8 @@ Overwrite `sw.js` as well. Version 3 uses a new cache name so the updated foreca
 - P% is rendered directly inside the rose probability block.
 - Trends now contains live Fourier spectra for migraine and menstruation start dates.
 - Forecasts recalculate automatically after every confirmed add/edit/delete; newer intervals are weighted more strongly.
+
+
+## Android / Samsung Internet
+
+On current Samsung Internet versions, Play Protect may block the browser-generated WebAPK as targeting an older Android version. Cycler detects Samsung Internet and directs installation through Google Chrome instead. This is a browser/WebAPK packaging issue, not a Cycler privacy setting.
