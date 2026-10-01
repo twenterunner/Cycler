@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-ensemble-v7';
+  const APP_VERSION = '2026.10.01-ensemble-v8';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -402,19 +402,23 @@
   }
 
   // ---------- Rendering ----------
-  // Non-linear visual scale: low-but-real probabilities remain visible, while peaks become much stronger.
-  function heatAlpha(p){
+  // Calendar colour is intentionally much lighter at low probability and much steeper near local peaks.
+  // The number remains the absolute probability; only visual intensity is normalized within the visible period.
+  function heatAlpha(p,minP,maxP){
     p=clamp(p||0);
-    if(p<=0.005)return .025;
-    return clamp(.06 + .88*Math.sqrt(p), .06, .94);
+    const absolute=clamp((p-.04)/.56,0,1);
+    const relative=maxP>minP+.015?clamp((p-minP)/(maxP-minP),0,1):absolute;
+    const score=.32*Math.pow(absolute,1.35)+.68*Math.pow(relative,1.75);
+    return clamp(.018+.80*score,.018,.82);
   }
-  function probabilityBadge(kind,p){
-    p=clamp(p||0);const pct=Math.round(p*100),v=Math.sqrt(p),strong=p>=.28;
-    const isM=kind==='migraine',alpha=(.18+.72*v).toFixed(3),bg=isM?`rgba(88,65,190,${alpha})`:`rgba(213,57,105,${alpha})`,fg=p>=.22?'#fff':(isM?'#3f2d94':'#8f2348');
-    return `<span class="prob-badge ${kind} ${strong?'strong':''}" style="background:${bg};color:${fg}"><b>${isM?'M':'P'}</b> ${pct}%</span>`;
+  function probabilityLabel(kind,p,visualAlpha){
+    p=clamp(p||0);const pct=Math.round(p*100),isM=kind==='migraine';
+    const light=visualAlpha>=.42;
+    const fg=light?'#fff':(isM?'#4c36a8':'#9a2a50');
+    return `<span class="prob-label ${kind}" style="color:${fg}"><b>${isM?'M':'P'}</b> ${pct}%</span>`;
   }
-  function confirmedBadge(kind,label){
-    return `<span class="event-pill ${kind}">${label}</span>`;
+  function confirmedLabel(kind,label){
+    return `<span class="confirmed-label ${kind}">${label}</span>`;
   }
   function forecastCard(s){
     const label=s.type==='migraine'?'Migraine':'Menstruation';
@@ -442,15 +446,18 @@
   }
   function renderCalendar(t,fc){
     const dates=visibleDates(),title=state.calendarMode==='month'?formatMonth(state.cursor):formatLong(state.cursor);
+    const values=dates.map(d=>fc.daily.get(d)||{migraineProbability:0,menstruationProbability:0});
+    const migValues=values.map(x=>x.migraineProbability||0),perValues=values.map(x=>x.menstruationProbability||0);
+    const mMin=Math.min(...migValues),mMax=Math.max(...migValues),pMin=Math.min(...perValues),pMax=Math.max(...perValues);
     const cells=dates.map(d=>{
       const p=fc.daily.get(d)||{migraineProbability:0,menstruationProbability:0},inMonth=d.slice(0,7)===state.cursor.slice(0,7),dayEvents=state.events.filter(e=>inEvent(d,e)),m=p.migraineProbability||0,s=p.menstruationProbability||0;
-      const ma=heatAlpha(m),pa=heatAlpha(s);
-      const bg=`linear-gradient(to bottom,rgba(88,65,190,${ma}) 0%,rgba(88,65,190,${ma}) 47%,rgba(255,255,255,.92) 48%,rgba(255,255,255,.92) 52%,rgba(213,57,105,${pa}) 53%,rgba(213,57,105,${pa}) 100%)`;
-      const topContent = dayEvents.some(e=>e.type==='migraine') ? confirmedBadge('migraine','● Migraine') : probabilityBadge('migraine',m);
-      const bottomContent = dayEvents.some(e=>e.type==='menstruation') ? confirmedBadge('menstruation','● Period') : probabilityBadge('menstruation',s);
+      const ma=heatAlpha(m,mMin,mMax),pa=heatAlpha(s,pMin,pMax);
+      const bg=`linear-gradient(to bottom,rgba(88,65,190,${ma}) 0%,rgba(88,65,190,${ma}) 49%,rgba(255,255,255,.98) 49.2%,rgba(255,255,255,.98) 50.8%,rgba(213,57,105,${pa}) 51%,rgba(213,57,105,${pa}) 100%)`;
+      const topContent=dayEvents.some(e=>e.type==='migraine')?confirmedLabel('migraine','● Migraine'):probabilityLabel('migraine',m,ma);
+      const bottomContent=dayEvents.some(e=>e.type==='menstruation')?confirmedLabel('menstruation','● Period'):probabilityLabel('menstruation',s,pa);
       return `<button class="day-cell heat-cell ${!inMonth&&state.calendarMode==='month'?'dim':''} ${d===t?'today':''}" data-date="${d}" style="background:${bg}"><span class="day-num">${Number(d.slice(8))}</span><div class="day-zone top-zone">${topContent}</div><div class="day-zone bottom-zone">${bottomContent}</div></button>`;
     }).join('');
-    return `<div class="page-intro"><h1>Calendar</h1><p>Confirmed events and daily probability forecasts.</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><section class="probability-key"><strong>What do M and P mean?</strong><span><b class="m">M</b> = probability of having migraine at some point on that date.</span><span><b class="p">P</b> = probability of menstruating on that date.</span><small>These are daily active-event probabilities, not the probability that an event starts that day. Darker colour = higher probability.</small></section><section class="calendar-card" id="calendar-card"><div class="calendar-toolbar"><div class="segmented"><button data-mode="week" class="${state.calendarMode==='week'?'active':''}">Week</button><button data-mode="month" class="${state.calendarMode==='month'?'active':''}">Month</button></div><strong>${title}</strong><div class="nav-buttons"><button data-nav="-1">‹</button><button data-nav="today">Today</button><button data-nav="1">›</button></div></div><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid ${state.calendarMode}">${cells}</div><div class="legend heat-legend"><span><b class="m">Purple</b> migraine probability</span><span><b class="p">Rose</b> menstruation probability</span><span>Colour intensity follows probability non-linearly so peaks stand out.</span></div><p class="calendar-hint">Swipe or use the arrows to move through time. Confirmed observations override forecasts.</p></section>`;
+    return `<div class="page-intro"><h1>Calendar</h1><p>Confirmed events and daily probability forecasts.</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><section class="probability-key"><strong>What do M and P mean?</strong><span><b class="m">M</b> = probability of having migraine at some point on that date.</span><span><b class="p">P</b> = probability of menstruating on that date.</span><small>The percentages are absolute probabilities. Heatmap intensity is contrast-enhanced within the displayed week/month so local peaks stand out clearly.</small></section><section class="calendar-card" id="calendar-card"><div class="calendar-toolbar"><div class="segmented"><button data-mode="week" class="${state.calendarMode==='week'?'active':''}">Week</button><button data-mode="month" class="${state.calendarMode==='month'?'active':''}">Month</button></div><strong>${title}</strong><div class="nav-buttons"><button data-nav="-1">‹</button><button data-nav="today">Today</button><button data-nav="1">›</button></div></div><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid ${state.calendarMode}">${cells}</div><div class="legend heat-legend"><span><b class="m">Purple</b> migraine probability</span><span><b class="p">Rose</b> menstruation probability</span><span>Very pale = low relative interest; saturated = local peak in the displayed period.</span></div><p class="calendar-hint">Swipe or use the arrows to move through time. Confirmed observations override forecasts.</p></section>`;
   }
   function renderTrends(){
     const m=state.events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),p=state.events.filter(e=>e.type==='menstruation').sort((a,b)=>a.startDate.localeCompare(b.startDate)),md=m.map(durationDays),pd=p.map(durationDays),mi=m.slice(1).map((e,i)=>diffDays(e.startDate,m[i].startDate)),pi=p.slice(1).map((e,i)=>diffDays(e.startDate,p[i].startDate)),overlap=m.filter(x=>p.some(y=>x.startDate<=y.endDate&&x.endDate>=y.startDate)).length,rel=Array.from({length:15},(_,i)=>i-7).map(r=>({r,rate:p.length?p.filter(x=>m.some(y=>inEvent(addDays(x.startDate,r),y))).length/p.length:0}));
