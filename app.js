@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-robust-v10';
+  const APP_VERSION = '2026.10.01-robust-v11';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -44,20 +44,36 @@
     trendHorizon: 30,
   };
 
-  let forecastCache = null;
+  const forecastCache = new Map();
   let trendsHtmlCache = null;
 
   function invalidateDerivedCaches(){
-    forecastCache = null;
+    forecastCache.clear();
     trendsHtmlCache = null;
     state.dataRevision += 1;
   }
 
-  function getForecast(anchor=todayISO(),horizon=730){
+  // Keep the normal UI fast: 180 future days are enough for Today, the current
+  // calendar and the 7/30-day Trends outlook. If the user navigates further
+  // into the future, expand the horizon only as far as that view requires.
+  function forecastHorizonForView(anchor=todayISO()){
+    let horizon=180;
+    if(state.tab==='calendar'){
+      const visibleEnd=state.calendarMode==='month'?monthEnd(state.cursor):addDays(startOfWeek(state.cursor),6);
+      const ahead=diffDays(visibleEnd,anchor);
+      if(ahead>150) horizon=Math.min(730,Math.max(180,ahead+35));
+    }
+    return horizon;
+  }
+
+  function getForecast(anchor=todayISO(),horizon=180){
     const key = `${state.dataRevision}|${anchor}|${horizon}`;
-    if(forecastCache && forecastCache.key===key) return forecastCache.value;
+    if(forecastCache.has(key)) return forecastCache.get(key);
     const value = buildForecast(state.events,anchor,horizon);
-    forecastCache = {key,value};
+    forecastCache.set(key,value);
+    // Keep only the most recent few horizons so navigation stays responsive
+    // without retaining unnecessary forecast maps.
+    while(forecastCache.size>3){forecastCache.delete(forecastCache.keys().next().value);}
     return value;
   }
 
@@ -184,9 +200,10 @@
   async function commitEvents(events,msg){
     state.events=normalizeEvents(events);
     invalidateDerivedCaches();
-    // Render immediately so taps feel responsive; persist just after the UI update.
-    render();
     if(msg) toast(msg);
+    // Yield once before rebuilding the statistical model. This lets the tap,
+    // sheet close and paint complete first on slower Android devices.
+    setTimeout(()=>render(),0);
     try{ await saveAll(state.events); }catch(err){ console.error('Failed to persist events',err); toast('Could not save locally'); }
   }
   async function quickLog(type){
@@ -442,9 +459,16 @@
     const label=s.type==='migraine'?'Migraine':'Menstruation';
     return `<section class="forecast-card ${s.type}"><div class="forecast-title-row"><span class="event-dot"></span><strong>${label}</strong><span class="confidence">${s.confidence} confidence</span></div><div class="forecast-main">${s.nextLikelyStart?formatShort(s.nextLikelyStart):'Not enough data'}</div><div class="forecast-prob">${s.nextLikelyStart?`Likely start ${Math.round(s.nextStartProbability*100)}% · peak day ${Math.round(s.peakActiveProbability*100)}% on ${formatShort(s.peakActiveDate)}`:'Add more confirmed events'}</div><div class="forecast-meta"><span>Window: ${s.windowStart&&s.windowEnd?`${formatShort(s.windowStart)}–${formatShort(s.windowEnd)}`:'—'}</span><span>Duration: ${s.durationLabel}</span></div>${s.spectralPeriod?`<div class="model-note">Rhythm signal ≈ ${s.spectralPeriod.toFixed(1)} d</div>`:''}</section>`;
   }
+  function ensureShell(){
+    if(document.querySelector('.app-shell')) return;
+    app.innerHTML=`<div class="app-shell"><header class="topbar"><div><strong>Cycle Forecast</strong><span>Private · local-first · ${APP_VERSION}</span></div><div class="top-actions" id="top-actions"></div></header><main id="main"></main><nav class="bottom-nav">${[['today','●','Today'],['calendar','▦','Calendar'],['trends','⌁','Trends'],['settings','⚙','Settings']].map(([id,ic,l])=>`<button data-tab="${id}"><span>${ic}</span>${l}</button>`).join('')}</nav></div>`;
+  }
   function render(){
-    const t=todayISO(),fc=getForecast(t,730);
-    app.innerHTML=`<div class="app-shell"><header class="topbar"><div><strong>Cycle Forecast</strong><span>Private · local-first · ${APP_VERSION}</span></div><div class="top-actions">${!state.installed?`<button class="install-top" id="install-app">${isSamsungInternet?'Install via Chrome':'Install app'}</button>`:'<span class="installed-badge">Installed</span>'}<span class="offline-badge">Offline ready</span></div></header><main id="main"></main><nav class="bottom-nav">${[['today','●','Today'],['calendar','▦','Calendar'],['trends','⌁','Trends'],['settings','⚙','Settings']].map(([id,ic,l])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span>${ic}</span>${l}</button>`).join('')}</nav></div>`;
+    const t=todayISO(),horizon=forecastHorizonForView(t),fc=getForecast(t,horizon);
+    ensureShell();
+    const topActions=document.getElementById('top-actions');
+    if(topActions) topActions.innerHTML=!state.installed?`<button class="install-top" id="install-app">${isSamsungInternet?'Install via Chrome':'Install app'}</button><span class="offline-badge">Offline ready</span>`:'<span class="installed-badge">Installed</span><span class="offline-badge">Offline ready</span>';
+    document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===state.tab));
     const main=document.getElementById('main');
     if(state.tab==='today') main.innerHTML=renderToday(t,fc);
     if(state.tab==='calendar') main.innerHTML=renderCalendar(t,fc);
@@ -460,7 +484,7 @@
       const existing=state.events.find(e=>e.type===type&&inEvent(t,e)),y=state.events.find(e=>e.type===type&&e.endDate===addDays(t,-1));
       return `<section class="quick-card today-prob ${type}"><div class="today-prob-head"><h3>${label}</h3><strong>${Math.round(prob*100)}%</strong></div>${existing?`<p>Confirmed today.</p><div class="quick-actions"><button class="secondary" data-edit="${existing.id}">Edit</button><button class="secondary" data-end="${existing.id}">End today</button></div>`:`<p>${y?'Continue yesterday’s event?':'Estimated probability today.'}</p><button class="primary" data-log="${type}">${y?`${label} continues today`:`Log ${label.toLowerCase()} today`}</button>`}</section>`;
     }
-    return `<div class="page-intro"><h1>Today</h1><p>${formatLong(t)}</p></div><div class="quick-grid">${card('migraine','Migraine',p.migraineProbability)}${card('menstruation','Menstruation',p.menstruationProbability)}</div><p class="privacy-note">Probabilities update automatically from confirmed history. Stored only on this device.</p>`;
+    return `<div class="page-intro"><h1>Today</h1><p>${formatLong(t)}</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><h2 class="section-title">Today</h2><div class="quick-grid">${card('migraine','Migraine',p.migraineProbability)}${card('menstruation','Menstruation',p.menstruationProbability)}</div><p class="privacy-note">Probabilities update automatically from confirmed history. Stored only on this device.</p>`;
   }
   function visibleDates(){
     if(state.calendarMode==='week'){const s=startOfWeek(state.cursor);return Array.from({length:7},(_,i)=>addDays(s,i));}
@@ -484,7 +508,7 @@
   function probabilityOutlookChart(fc,days){
     const start=todayISO(),data=Array.from({length:days},(_,i)=>{const d=addDays(start,i),p=fc.daily.get(d)||{migraineProbability:0,menstruationProbability:0};return{date:d,m:100*(p.migraineProbability||0),p:100*(p.menstruationProbability||0)};});
     const W=680,H=260,L=44,R=18,T=22,B=38,plotW=W-L-R,plotH=H-T-B,x=i=>L+(days===1?0:i/(days-1))*plotW,y=v=>T+(1-v/100)*plotH,mPts=data.map((d,i)=>`${x(i).toFixed(1)},${y(d.m).toFixed(1)}`).join(' '),pPts=data.map((d,i)=>`${x(i).toFixed(1)},${y(d.p).toFixed(1)}`).join(' '),yticks=[0,25,50,75,100],xEvery=days<=7?1:5,xticks=data.map((d,i)=>({d,i})).filter(({i})=>i===0||i===days-1||i%xEvery===0);
-    return `<section class="trend-card outlook-card"><div class="trend-title-row"><div><h2>Probability outlook</h2><p class="muted">Probability of each event being active on each future date.</p></div><div class="segmented compact"><button data-trend-range="7" class="${days===7?'active':''}">7 days</button><button data-trend-range="30" class="${days===30?'active':''}">30 days</button></div></div><svg class="outlook-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Migraine and menstruation probability outlook">${yticks.map(v=>`<line x1="${L}" y1="${y(v)}" x2="${W-R}" y2="${y(v)}" class="gridline"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end" class="axis-label">${v}%</text>`).join('')}${xticks.map(({d,i})=>`<text x="${x(i)}" y="${H-10}" text-anchor="middle" class="axis-label">${formatShort(d)}</text>`).join('')}<polyline points="${mPts}" class="outlook-line migraine"/><polyline points="${pPts}" class="outlook-line menstruation"/>${data.map((d,i)=>`<circle cx="${x(i)}" cy="${y(d.m)}" r="${days===7?3.5:2.2}" class="outlook-dot migraine"><title>${formatShort(d)} · M ${Math.round(d.m)}%</title></circle><circle cx="${x(i)}" cy="${y(d.p)}" r="${days===7?3.5:2.2}" class="outlook-dot menstruation"><title>${formatShort(d)} · P ${Math.round(d.p)}%</title></circle>`).join('')}<text x="${L}" y="14" class="axis-title">Daily probability</text></svg><div class="outlook-legend"><span class="migraine">● Migraine</span><span class="menstruation">● Menstruation</span></div></section>`;
+    return `<section class="trend-card outlook-card"><div class="trend-title-row"><div><h2>Probability outlook</h2><p class="muted">Probability of each event being active on each future date.</p></div><div class="segmented compact"><button data-trend-range="7" class="${days===7?'active':''}">7 days</button><button data-trend-range="30" class="${days===30?'active':''}">30 days</button></div></div><svg class="outlook-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Migraine and menstruation probability outlook">${yticks.map(v=>`<line x1="${L}" y1="${y(v)}" x2="${W-R}" y2="${y(v)}" class="gridline"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end" class="axis-label">${v}%</text>`).join('')}${xticks.map(({d,i})=>`<text x="${x(i)}" y="${H-10}" text-anchor="middle" class="axis-label">${formatShort(d.date)}</text>`).join('')}<polyline points="${mPts}" class="outlook-line migraine"/><polyline points="${pPts}" class="outlook-line menstruation"/>${data.map((d,i)=>`<circle cx="${x(i)}" cy="${y(d.m)}" r="${days===7?3.5:2.2}" class="outlook-dot migraine"><title>${formatShort(d.date)} · M ${Math.round(d.m)}%</title></circle><circle cx="${x(i)}" cy="${y(d.p)}" r="${days===7?3.5:2.2}" class="outlook-dot menstruation"><title>${formatShort(d.date)} · P ${Math.round(d.p)}%</title></circle>`).join('')}<text x="${L}" y="14" class="axis-title">Daily probability</text></svg><div class="outlook-legend"><span class="migraine">● Migraine</span><span class="menstruation">● Menstruation</span></div></section>`;
   }
 
   function renderTrends(fc){
