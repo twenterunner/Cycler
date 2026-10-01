@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-ensemble-v8';
+  const APP_VERSION = '2026.10.01-ensemble-v9-fast';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -40,7 +40,25 @@
     touchX: null,
     installReady: false,
     installed: window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true,
+    dataRevision: 0,
   };
+
+  let forecastCache = null;
+  let trendsHtmlCache = null;
+
+  function invalidateDerivedCaches(){
+    forecastCache = null;
+    trendsHtmlCache = null;
+    state.dataRevision += 1;
+  }
+
+  function getForecast(anchor=todayISO(),horizon=730){
+    const key = `${state.dataRevision}|${anchor}|${horizon}`;
+    if(forecastCache && forecastCache.key===key) return forecastCache.value;
+    const value = buildForecast(state.events,anchor,horizon);
+    forecastCache = {key,value};
+    return value;
+  }
 
   const isSamsungInternet = /SamsungBrowser/i.test(navigator.userAgent);
 
@@ -162,7 +180,14 @@
     }
     return result.sort((a,b)=>a.startDate.localeCompare(b.startDate)||a.type.localeCompare(b.type));
   }
-  async function commitEvents(events,msg){ state.events=normalizeEvents(events); await saveAll(state.events); render(); if(msg) toast(msg); }
+  async function commitEvents(events,msg){
+    state.events=normalizeEvents(events);
+    invalidateDerivedCaches();
+    // Render immediately so taps feel responsive; persist just after the UI update.
+    render();
+    if(msg) toast(msg);
+    try{ await saveAll(state.events); }catch(err){ console.error('Failed to persist events',err); toast('Could not save locally'); }
+  }
   async function quickLog(type){
     const t=todayISO();
     if(state.events.some(e=>e.type===type&&inEvent(t,e))) return;
@@ -425,12 +450,12 @@
     return `<section class="forecast-card ${s.type}"><div class="forecast-title-row"><span class="event-dot"></span><strong>${label}</strong><span class="confidence">${s.confidence} confidence</span></div><div class="forecast-main">${s.nextLikelyStart?formatShort(s.nextLikelyStart):'Not enough data'}</div><div class="forecast-prob">${s.nextLikelyStart?`Likely start ${Math.round(s.nextStartProbability*100)}% · peak day ${Math.round(s.peakActiveProbability*100)}% on ${formatShort(s.peakActiveDate)}`:'Add more confirmed events'}</div><div class="forecast-meta"><span>Window: ${s.windowStart&&s.windowEnd?`${formatShort(s.windowStart)}–${formatShort(s.windowEnd)}`:'—'}</span><span>Duration: ${s.durationLabel}</span></div>${s.spectralPeriod?`<div class="model-note">Rhythm signal ≈ ${s.spectralPeriod.toFixed(1)} d</div>`:''}</section>`;
   }
   function render(){
-    const t=todayISO(),fc=buildForecast(state.events,t,730);
+    const t=todayISO(),fc=getForecast(t,730);
     app.innerHTML=`<div class="app-shell"><header class="topbar"><div><strong>Cycle Forecast</strong><span>Private · local-first · ${APP_VERSION}</span></div><div class="top-actions">${!state.installed?`<button class="install-top" id="install-app">${isSamsungInternet?'Install via Chrome':'Install app'}</button>`:'<span class="installed-badge">Installed</span>'}<span class="offline-badge">Offline ready</span></div></header><main id="main"></main><nav class="bottom-nav">${[['today','●','Today'],['calendar','▦','Calendar'],['trends','⌁','Trends'],['settings','⚙','Settings']].map(([id,ic,l])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span>${ic}</span>${l}</button>`).join('')}</nav></div>`;
     const main=document.getElementById('main');
     if(state.tab==='today') main.innerHTML=renderToday(t,fc);
     if(state.tab==='calendar') main.innerHTML=renderCalendar(t,fc);
-    if(state.tab==='trends') main.innerHTML=renderTrends();
+    if(state.tab==='trends') main.innerHTML=renderTrends(fc);
     if(state.tab==='settings') main.innerHTML=renderSettings();
     bind(fc);
     if(state.selectedDate) openDaySheet(state.selectedDate,fc);
@@ -459,11 +484,14 @@
     }).join('');
     return `<div class="page-intro"><h1>Calendar</h1><p>Confirmed events and daily probability forecasts.</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><section class="probability-key"><strong>What do M and P mean?</strong><span><b class="m">M</b> = probability of having migraine at some point on that date.</span><span><b class="p">P</b> = probability of menstruating on that date.</span><small>The percentages are absolute probabilities. Heatmap intensity is contrast-enhanced within the displayed week/month so local peaks stand out clearly.</small></section><section class="calendar-card" id="calendar-card"><div class="calendar-toolbar"><div class="segmented"><button data-mode="week" class="${state.calendarMode==='week'?'active':''}">Week</button><button data-mode="month" class="${state.calendarMode==='month'?'active':''}">Month</button></div><strong>${title}</strong><div class="nav-buttons"><button data-nav="-1">‹</button><button data-nav="today">Today</button><button data-nav="1">›</button></div></div><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid ${state.calendarMode}">${cells}</div><div class="legend heat-legend"><span><b class="m">Purple</b> migraine probability</span><span><b class="p">Rose</b> menstruation probability</span><span>Very pale = low relative interest; saturated = local peak in the displayed period.</span></div><p class="calendar-hint">Swipe or use the arrows to move through time. Confirmed observations override forecasts.</p></section>`;
   }
-  function renderTrends(){
+  function renderTrends(fc){
+    const trendKey=`${state.dataRevision}|${todayISO()}`;
+    if(trendsHtmlCache && trendsHtmlCache.key===trendKey) return trendsHtmlCache.html;
     const m=state.events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),p=state.events.filter(e=>e.type==='menstruation').sort((a,b)=>a.startDate.localeCompare(b.startDate)),md=m.map(durationDays),pd=p.map(durationDays),mi=m.slice(1).map((e,i)=>diffDays(e.startDate,m[i].startDate)),pi=p.slice(1).map((e,i)=>diffDays(e.startDate,p[i].startDate)),overlap=m.filter(x=>p.some(y=>x.startDate<=y.endDate&&x.endDate>=y.startDate)).length,rel=Array.from({length:15},(_,i)=>i-7).map(r=>({r,rate:p.length?p.filter(x=>m.some(y=>inEvent(addDays(x.startDate,r),y))).length/p.length:0}));
     const stat=(t,v)=>`<section class="stat"><span>${t}</span><strong>${v}</strong></section>`;
-    const fc=buildForecast(state.events,todayISO(),180);
-    return `<div class="page-intro"><h1>Trends</h1><p>Descriptive statistics and transparent forecast signals.</p></div>${state.events.length?`<div class="stats-grid">${stat('Migraine events',m.length)}${stat('Migraine duration',md.length?`${mean(md).toFixed(1)} d avg · ${median(md).toFixed(1)} d median`:'—')}${stat('Migraine interval',mi.length?`${mean(mi).toFixed(1)} d avg`:'—')}${stat('Migraine rhythm',fc.mig.spectral?.period?`${fc.mig.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Menstruation cycles',p.length)}${stat('Period duration',pd.length?`${mean(pd).toFixed(1)} d avg`:'—')}${stat('Cycle length',pi.length?`${mean(pi).toFixed(1)} d avg`:'—')}${stat('Menstruation rhythm',fc.men.spectral?.period?`${fc.men.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Overlapping migraine episodes',`${overlap}/${m.length}`)}</div><div class="fourier-grid">${fourierChart('Migraine Fourier spectrum',m.map(e=>e.startDate),fc.mig.spectral,'migraine')}${fourierChart('Menstruation Fourier spectrum',p.map(e=>e.startDate),fc.men.spectral,'menstruation')}</div><section class="trend-card"><h2>Migraine by day relative to menstruation start</h2><div class="rel-chart">${rel.map(x=>`<div class="rel-col"><div class="rel-bar" style="height:${Math.max(2,x.rate*120)}px" title="${Math.round(x.rate*100)}%"></div><span>${x.r>0?'+'+x.r:x.r}</span></div>`).join('')}</div><p class="muted">Observed relationship, not proof of causation.</p></section><section class="trend-card learning-note"><h2>How the forecast learns</h2><p>Every confirmed add, edit or delete immediately rebuilds the interval distributions, duration model, migraine-to-menstruation phase relationship and Fourier spectrum from the full current history. Recent intervals receive more weight, so new observations gradually influence the forecast more than older ones.</p><p class="muted">This is deterministic statistical learning/recalculation, not a hidden AI model. Forecast confidence rises only when more confirmed observations also become consistent.</p></section>`:`<section class="empty-card">Log confirmed events to populate trends.</section>`}</div>`;
+    const html=`<div class="page-intro"><h1>Trends</h1><p>Descriptive statistics and transparent forecast signals.</p></div>${state.events.length?`<div class="stats-grid">${stat('Migraine events',m.length)}${stat('Migraine duration',md.length?`${mean(md).toFixed(1)} d avg · ${median(md).toFixed(1)} d median`:'—')}${stat('Migraine interval',mi.length?`${mean(mi).toFixed(1)} d avg`:'—')}${stat('Migraine rhythm',fc.mig.spectral?.period?`${fc.mig.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Menstruation cycles',p.length)}${stat('Period duration',pd.length?`${mean(pd).toFixed(1)} d avg`:'—')}${stat('Cycle length',pi.length?`${mean(pi).toFixed(1)} d avg`:'—')}${stat('Menstruation rhythm',fc.men.spectral?.period?`${fc.men.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Overlapping migraine episodes',`${overlap}/${m.length}`)}</div><div class="fourier-grid">${fourierChart('Migraine Fourier spectrum',m.map(e=>e.startDate),fc.mig.spectral,'migraine')}${fourierChart('Menstruation Fourier spectrum',p.map(e=>e.startDate),fc.men.spectral,'menstruation')}</div><section class="trend-card"><h2>Migraine by day relative to menstruation start</h2><div class="rel-chart">${rel.map(x=>`<div class="rel-col"><div class="rel-bar" style="height:${Math.max(2,x.rate*120)}px" title="${Math.round(x.rate*100)}%"></div><span>${x.r>0?'+'+x.r:x.r}</span></div>`).join('')}</div><p class="muted">Observed relationship, not proof of causation.</p></section><section class="trend-card learning-note"><h2>How the forecast learns</h2><p>Every confirmed add, edit or delete immediately rebuilds the interval distributions, duration model, migraine-to-menstruation phase relationship and Fourier spectrum from the full current history. Recent intervals receive more weight, so new observations gradually influence the forecast more than older ones.</p><p class="muted">This is deterministic statistical learning/recalculation, not a hidden AI model. Forecast confidence rises only when more confirmed observations also become consistent.</p></section>`:`<section class="empty-card">Log confirmed events to populate trends.</section>`}</div>`;
+    trendsHtmlCache={key:trendKey,html};
+    return html;
   }
   function renderSettings(){
     const installState=state.installed
@@ -479,11 +507,11 @@
     const installSettings=document.getElementById('install-app-settings'); if(installSettings)installSettings.onclick=installApp;
     document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;state.selectedDate=null;state.editingId=null;state.addType=null;render();});
     document.querySelectorAll('[data-log]').forEach(b=>b.onclick=()=>quickLog(b.dataset.log));
-    document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.edit;render();});
+    document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.edit;state.selectedDate=null;openEditSheet();});
     document.querySelectorAll('[data-end]').forEach(b=>b.onclick=async()=>{const id=b.dataset.end,t=todayISO();await commitEvents(state.events.map(e=>e.id===id?{...e,endDate:t,updatedAt:Date.now()}:e),'Event ended');});
     document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{state.calendarMode=b.dataset.mode;render();});
     document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>navigate(b.dataset.nav));
-    document.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{state.selectedDate=b.dataset.date;render();});
+    document.querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>{state.selectedDate=b.dataset.date;openDaySheet(state.selectedDate,fc);});
     const cal=document.getElementById('calendar-card'); if(cal){cal.ontouchstart=e=>state.touchX=e.touches[0].clientX;cal.ontouchend=e=>{if(state.touchX==null)return;const dx=e.changedTouches[0].clientX-state.touchX;if(Math.abs(dx)>50)navigate(dx<0?'1':'-1');state.touchX=null;};}
     const exp=document.getElementById('export-json'); if(exp)exp.onclick=exportJson;
     const imp=document.getElementById('import-json'),file=document.getElementById('import-file'); if(imp&&file){imp.onclick=()=>file.click();file.onchange=()=>importJson(file.files?.[0]);}
@@ -499,9 +527,10 @@
   function openDaySheet(date,fc){
     const e=state.events.filter(x=>inEvent(date,x)),p=fc.daily.get(date)||{migraineProbability:0,menstruationProbability:0};
     const node=document.createElement('div');node.className='modal-backdrop';node.innerHTML=`<section class="sheet"><div class="sheet-head"><div><h2>${formatLong(date)}</h2><p class="muted">Confirmed observations override forecasts.</p></div><button class="icon-btn" id="close-day">×</button></div>${e.length?`<div class="confirmed-list">${e.map(x=>`<button class="confirmed-item ${x.type}" data-sheet-edit="${x.id}">● ${x.type==='migraine'?'Migraine':'Menstruation'} · edit</button>`).join('')}</div>`:''}<div class="add-row"><button class="secondary" data-add="migraine">+ Migraine</button><button class="secondary" data-add="menstruation">+ Menstruation</button></div><div class="prob-detail"><strong>Migraine active on this date</strong><span>${Math.round(p.migraineProbability*100)}%</span></div><ul class="reason-list">${reasons('migraine',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul><div class="prob-detail"><strong>Menstruating on this date</strong><span>${Math.round(p.menstruationProbability*100)}%</span></div><ul class="reason-list">${reasons('menstruation',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section>`;
-    node.onclick=e2=>{if(e2.target===node){state.selectedDate=null;render();}};document.body.appendChild(node);
-    node.querySelector('#close-day').onclick=()=>{state.selectedDate=null;render();};
-    node.querySelectorAll('[data-sheet-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.sheetEdit;state.selectedDate=null;render();});
+    const closeDay=()=>{state.selectedDate=null;node.remove();};
+    node.onclick=e2=>{if(e2.target===node)closeDay();};document.body.appendChild(node);
+    node.querySelector('#close-day').onclick=closeDay;
+    node.querySelectorAll('[data-sheet-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.sheetEdit;state.selectedDate=null;node.remove();openEditSheet();});
     node.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{state.addType=b.dataset.add;state.selectedDate=date;state.editingId=null;openEditSheet();node.remove();});
   }
   function openEditSheet(){
@@ -542,6 +571,7 @@
         localStorage.setItem(SEED_DATA_VERSION,'done');
       }
     }catch(e){console.error(e);state.events=[];}
+    invalidateDerivedCaches();
     render();
     if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.error)); }
   }

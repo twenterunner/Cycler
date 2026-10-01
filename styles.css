@@ -49,3 +49,8 @@
   .top-zone{padding-top:23px}
   .prob-label,.confirmed-label{font-size:8.5px}
 }
+
+
+/* v9 responsiveness */
+button,[role=button]{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.day-cell,.bottom-nav button,.segmented button,.nav-buttons button{will-change:auto}

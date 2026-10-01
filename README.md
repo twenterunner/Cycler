@@ -53,3 +53,8 @@ Overwrite `sw.js` as well. Version 3 uses a new cache name so the updated foreca
 ## Android / Samsung Internet
 
 On current Samsung Internet versions, Play Protect may block the browser-generated WebAPK as targeting an older Android version. Cycler detects Samsung Internet and directs installation through Google Chrome instead. This is a browser/WebAPK packaging issue, not a Cycler privacy setting.
+
+
+## Performance
+
+Forecast calculations are cached and are only rebuilt when confirmed event data changes or the date anchor changes. Calendar taps and navigation reuse the cached model; event persistence is performed after the UI has updated.
