@@ -1,5 +1,5 @@
-const CACHE='cycler-static-v20261001-12';
-const CORE=['./','./index.html','./styles.css?v=20261001-12','./app.js?v=20261001-12','./manifest.webmanifest','./icon.svg','./icon-192.png','./icon-512.png'];
+const CACHE='cycler-static-v20261001-13';
+const CORE=['./','./index.html','./styles.css?v=20261001-13','./app.js?v=20261001-13','./manifest.webmanifest','./icon.svg','./icon-192.png','./icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)));

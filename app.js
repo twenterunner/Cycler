@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-phase-v12';
+  const APP_VERSION = '2026.10.01-phase-v13';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -336,7 +336,7 @@
     const bias=weightedMean(robust,w),spread=Math.max(1.25,weightedStd(robust,w,bias)),sigma=Math.min(p*.36,spread*Math.sqrt(1+1.25/Math.max(1,robust.length))),totalCycles=multiples.reduce((a,b)=>a+b,0),hitRate=clamp((intervals.length+2)/(totalCycles+3),.45,.94);
     const coherence=clamp(spectral.coherence||0),prominence=clamp(((spectral.prominence||1)-1.5)/5,0,1),validation=clamp(spectral.validation||0),jitterQuality=clamp(1-sigma/Math.max(2,p*.45),0,1),sample=clamp((sorted.length-4)/7,0,1);
     const evidence=clamp(.34*coherence+.24*prominence+.24*jitterQuality+.18*validation,0,1),weight=clamp(evidence*sample*.58,0,.46),effectivePeriod=clamp(p+.40*bias,p*.90,p*1.10),drift=Math.max(.55,sigma*.32);
-    return{period:p,effectivePeriod,bias,sigma,drift,hitRate,weight,lastStart:sorted.at(-1),coherence,prominence,validation,jitterQuality};
+    return{period:p,effectivePeriod,bias,sigma,drift,hitRate,weight,evidence,lastStart:sorted.at(-1),coherence,prominence,validation,jitterQuality};
   }
 
   function rhythmRecurringMass(rhythm,anchor,horizon){
@@ -348,6 +348,47 @@
       for(let i=0;i<=horizon;i++)out[i]+=mass*normalPdf(i,center,sigma);
     }
     return out;
+  }
+
+
+  // For the *next* migraine, a strong coherent rhythm should create a distinct
+  // near-term opportunity rather than merely tinting an already broad interval
+  // distribution.  This is still conservative: the opportunity width comes
+  // from observed phase jitter, the chance of skipping an opportunity is
+  // learned from the history, and the rhythm's influence is bounded by its
+  // coherence/prominence/walk-forward evidence.  Later opportunities widen.
+  function phaseLockedNextStartForecast(fallbackMap,rhythm,anchor,horizon){
+    if(!rhythm?.lastStart||!rhythm.effectivePeriod)return fallbackMap;
+    const fallback=normalize(mapToArray(fallbackMap,anchor,horizon));
+    const elapsed=Math.max(0,diffDays(anchor,rhythm.lastStart)),p=rhythm.effectivePeriod;
+    const firstCycle=Math.max(1,Math.ceil(Math.max(.01,elapsed)/p));
+    const rhythmic=Array(horizon+1).fill(0);
+    let survival=1;
+    const hit=clamp(rhythm.hitRate,.45,.94);
+    for(let cycle=firstCycle;cycle<=firstCycle+8;cycle++){
+      const center=cycle*p-elapsed;
+      if(center>horizon+8*p)break;
+      if(center<-5)continue;
+      const opportunityIndex=cycle-firstCycle;
+      // Near-term phase is sharper; uncertainty grows only for later cycles.
+      const sigma=Math.max(1.15,Math.sqrt(rhythm.sigma*rhythm.sigma+opportunityIndex*rhythm.drift*rhythm.drift));
+      const opportunityMass=survival*hit;
+      const kernel=Array(horizon+1).fill(0);
+      let ksum=0;
+      for(let i=0;i<=horizon;i++){const v=normalPdf(i,center,sigma);kernel[i]=v;ksum+=v;}
+      if(ksum>0)for(let i=0;i<=horizon;i++)rhythmic[i]+=opportunityMass*kernel[i]/ksum;
+      survival*=1-hit;
+      if(survival<.002)break;
+    }
+    // Preserve a small tail from the robust interval model for unmodelled timing.
+    if(survival>0){for(let i=0;i<=horizon;i++)rhythmic[i]+=survival*(fallback[i]||0);}
+    const rdist=normalize(rhythmic);
+    const evidence=clamp(rhythm.evidence||0,0,1);
+    // A very coherent, validated rhythm may dominate the immediate next-event
+    // forecast, but never completely replaces the interval model.
+    const w=clamp(.48+.34*evidence,.48,.82);
+    const combined=normalize(fallback.map((p,i)=>(1-w)*p+w*(rdist[i]||0)));
+    return normalizeMapArray(combined,anchor);
   }
 
   function fourierSpectrum(starts,minPeriod=7,maxPeriod=60,step=.5){
@@ -440,7 +481,8 @@
   function buildMigraine(events,men,anchor,horizon){
     const migraines=events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),starts=migraines.map(e=>e.startDate),dur=durationForecast(migraines),rec=recurrenceModel(starts,anchor,horizon),spectral=spectralModel(starts),rhythm=latentRhythmModel(starts,spectral),baseline=historicalBaseline(migraines,events),phase=migrainePhaseModel(migraines,men.periods);
     if(migraines.length<2)return{migraines,rec,dur,spectral,rhythm,baseline,phase,unexplainedFloor:baseline*.2,nextStart:new Map(),startMass:new Map(),occ:new Map(),summary:summary('migraine',new Map(),new Map(),dur.label,'Low',spectral,anchor)};
-    const extra=d=>menstrualPhaseScore(d,men.startMass,phase);extra.strength=phase.strength;const nextStart=blendStartForecast(rec,spectral,anchor,horizon,'migraine',extra),phaseMult=d=>Math.pow(Math.max(.4,menstrualPhaseScore(d,men.startMass,phase)),phase.strength),startMass=renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMult,rhythm),occ=occurrenceFromStartMass(startMass,dur,anchor,horizon),reliability=clamp(.35+.045*rec.intervals.length+.25*(spectral.predictiveWeight||0)+.12*(rhythm?.weight||0)+phase.strength,.35,.91),unexplainedFloor=clamp(baseline*(1-reliability)*.27,.0035,.04);
+    const extra=d=>menstrualPhaseScore(d,men.startMass,phase);extra.strength=phase.strength;
+    const broadNextStart=blendStartForecast(rec,spectral,anchor,horizon,'migraine',extra),nextStart=rhythm?phaseLockedNextStartForecast(broadNextStart,rhythm,anchor,horizon):broadNextStart,phaseMult=d=>Math.pow(Math.max(.4,menstrualPhaseScore(d,men.startMass,phase)),phase.strength),startMass=renewalStartMass(nextStart,rec,spectral,anchor,horizon,phaseMult,rhythm),occ=occurrenceFromStartMass(startMass,dur,anchor,horizon),reliability=clamp(.35+.045*rec.intervals.length+.25*(spectral.predictiveWeight||0)+.12*(rhythm?.weight||0)+phase.strength,.35,.91),unexplainedFloor=clamp(baseline*(1-reliability)*.27,.0035,.04);
     migraines.forEach(e=>eachDay(e.startDate,e.endDate).forEach(d=>occ.set(d,1)));return{migraines,rec,dur,spectral,rhythm,baseline,phase,unexplainedFloor,nextStart,startMass,occ,summary:summary('migraine',nextStart,occ,dur.label,confidence(rec,men.periods.length,'migraine'),spectral,anchor)};
   }
 
@@ -462,7 +504,7 @@
     if(type==='migraine'){
       if(state.events.some(e=>e.type==='migraine'&&inEvent(date,e)))return['Confirmed migraine event.'];
       const r=['Probability is based mainly on conditional time since the last event and the observed interval distribution.'];
-      if(fc.mig.spectral?.predictiveWeight>.01)r.push('A validated Fourier rhythm contributes to timing; recurrent future peaks use a phase-state model whose uncertainty widens with time.');
+      if(fc.mig.spectral?.predictiveWeight>.01)r.push('A validated Fourier rhythm phase-locks the next opportunity when evidence is coherent; later peaks widen as uncertainty accumulates.');
       if(fc.mig.phase?.strength>.01)r.push('The menstruation timing relationship contributes with small-sample shrinkage.');
       r.push('Observed duration is folded into the probability of migraine being active on this date.');return r;
     }
@@ -560,7 +602,7 @@
       : isSamsungInternet
         ? 'Samsung Internet detected. On recent Android versions its generated WebAPK can be blocked by Play Protect. Open Cycler in Google Chrome and install it there instead.'
         : (state.installReady?'Android install prompt is ready.':'If Chrome does not offer installation yet, reload once and use Chrome menu ⋮ → Install app / Add to Home screen.');
-    return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card install-card"><h2>Install on Android</h2><p>Install Cycler as a standalone app with its own home-screen icon. It will continue to work offline.</p><button class="primary" id="install-app-settings" ${state.installed?'disabled':''}>${state.installed?'Installed':(isSamsungInternet?'Open in Chrome to install':'Install Cycler')}</button><p class="muted">${installState}</p></section><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Probability labels</h2><p><strong>M</strong> means the modelled probability that migraine is active on that date. <strong>P</strong> means the modelled probability that menstruation is active on that date.</p><p class="muted">They combine forecasted start timing with observed event duration.</p></section><section class="settings-card"><h2>Learning</h2><p>Every confirmed event automatically recalculates the forecast model. Newer observations are weighted more strongly while older history remains part of the model.</p><p class="muted">The model checks whether rhythm signals improved earlier forecasts before giving them much influence.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`;
+    return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card install-card"><h2>Install on Android</h2><p>Install Cycler as a standalone app with its own home-screen icon. It will continue to work offline.</p><button class="primary" id="install-app-settings" ${state.installed?'disabled':''}>${state.installed?'Installed':(isSamsungInternet?'Open in Chrome to install':'Install Cycler')}</button><p class="muted">${installState}</p></section><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Probability labels</h2><p><strong>M</strong> means the modelled probability that migraine is active on that date. <strong>P</strong> means the modelled probability that menstruation is active on that date.</p><p class="muted">They combine forecasted start timing with observed event duration.</p></section><section class="settings-card"><h2>Learning</h2><p>Every confirmed event automatically recalculates the forecast model. Newer observations are weighted more strongly while older history remains part of the model.</p><p class="muted">For migraine, a coherent validated rhythm can strongly phase-lock the next event; its timing uncertainty widens for later cycles. The rhythm is still bounded by the robust interval model and by learned skipped-cycle behaviour.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`;
   }
 
   function bind(fc){
