@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-ensemble-v4';
+  const APP_VERSION = '2026.10.01-ensemble-v5';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -214,6 +214,30 @@
     const t=diffDays(date,m.origin),p=m.period,x=((t-m.phase)%p+p)%p,dist=Math.min(x,p-x);
     return Math.exp(-.5*(dist/m.sigma)**2);
   }
+  function fourierSpectrum(starts,minPeriod=7,maxPeriod=60,step=.5){
+    const sorted=[...starts].sort();
+    if(sorted.length<4)return[];
+    const origin=sorted[0],pos=sorted.map(d=>diffDays(d,origin)),span=Math.max(...pos)+1,series=Array(span).fill(0);
+    pos.forEach(i=>series[i]=1);
+    const avg=mean(series),windowed=series.map((x,i)=>{const win=span>1?.5*(1-Math.cos(2*Math.PI*i/(span-1))):1;return(x-avg)*win;});
+    const out=[];let maxAmp=0;
+    for(let period=minPeriod;period<=maxPeriod+1e-9;period+=step){
+      let re=0,im=0,om=2*Math.PI/period;
+      for(let t=0;t<span;t++){re+=windowed[t]*Math.cos(om*t);im+=windowed[t]*Math.sin(om*t);}
+      const amp=Math.hypot(re,im);maxAmp=Math.max(maxAmp,amp);out.push({period,amp});
+    }
+    return out.map(x=>({period:x.period,amplitude:maxAmp?x.amp/maxAmp:0}));
+  }
+  function fourierChart(title,starts,spectral,kind){
+    const data=fourierSpectrum(starts);
+    if(!data.length)return`<section class="trend-card fourier-card"><h2>${title}</h2><p class="muted">Not enough confirmed event starts for a Fourier spectrum yet.</p></section>`;
+    const W=640,H=220,L=44,R=18,T=24,B=34,plotW=W-L-R,plotH=H-T-B,minP=7,maxP=60;
+    const x=p=>L+(p-minP)/(maxP-minP)*plotW,y=a=>T+(1-a)*plotH;
+    const pts=data.map(d=>`${x(d.period).toFixed(1)},${y(d.amplitude).toFixed(1)}`).join(' ');
+    const xticks=[7,14,21,28,35,42,49,56],yticks=[0,.5,1];
+    const peak=spectral?.period||data.reduce((b,d)=>d.amplitude>b.amplitude?d:b,data[0]).period,px=x(peak);
+    return `<section class="trend-card fourier-card ${kind}"><div class="trend-title-row"><div><h2>${title}</h2><p class="muted">Normalized Fourier amplitude by period. Higher peaks indicate stronger repeating timing in the confirmed start dates.</p></div><strong class="fourier-peak">Peak ≈ ${peak.toFixed(1)} d</strong></div><svg class="fourier-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${title} Fourier spectrum">${yticks.map(v=>`<line x1="${L}" y1="${y(v)}" x2="${W-R}" y2="${y(v)}" class="gridline"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end" class="axis-label">${Math.round(v*100)}</text>`).join('')}${xticks.map(v=>`<line x1="${x(v)}" y1="${T}" x2="${x(v)}" y2="${H-B}" class="gridline vertical"/><text x="${x(v)}" y="${H-10}" text-anchor="middle" class="axis-label">${v}</text>`).join('')}<line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="axis"/><line x1="${px}" y1="${T}" x2="${px}" y2="${H-B}" class="peak-line"/><polyline points="${pts}" class="spectrum-line"/><circle cx="${px}" cy="${y(1)}" r="4.5" class="peak-dot"/><text x="${W-R}" y="${H-10}" text-anchor="end" class="axis-title">Period (days)</text><text x="${L}" y="14" class="axis-title">Relative amplitude (%)</text></svg></section>`;
+  }
 
   function normalizeMapArray(arr,anchor){
     const n=normalize(arr); const m=new Map(); n.forEach((p,i)=>{if(p>1e-8)m.set(addDays(anchor,i),p);}); return m;
@@ -362,8 +386,9 @@
     return clamp(.06 + .88*Math.sqrt(p), .06, .94);
   }
   function probabilityBadge(kind,p){
-    const pct=Math.round(clamp(p||0)*100), strong=p>=.28;
-    return `<span class="prob-badge ${kind} ${strong?'strong':''}"><b>${kind==='migraine'?'M':'P'}</b> ${pct}%<i style="width:${pct}%"></i></span>`;
+    p=clamp(p||0);const pct=Math.round(p*100),v=Math.sqrt(p),strong=p>=.28;
+    const isM=kind==='migraine',alpha=(.18+.72*v).toFixed(3),bg=isM?`rgba(88,65,190,${alpha})`:`rgba(213,57,105,${alpha})`,fg=p>=.22?'#fff':(isM?'#3f2d94':'#8f2348');
+    return `<span class="prob-badge ${kind} ${strong?'strong':''}" style="background:${bg};color:${fg}"><b>${isM?'M':'P'}</b> ${pct}%</span>`;
   }
   function forecastCard(s){
     const label=s.type==='migraine'?'Migraine':'Menstruation';
@@ -403,11 +428,11 @@
     const m=state.events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),p=state.events.filter(e=>e.type==='menstruation').sort((a,b)=>a.startDate.localeCompare(b.startDate)),md=m.map(durationDays),pd=p.map(durationDays),mi=m.slice(1).map((e,i)=>diffDays(e.startDate,m[i].startDate)),pi=p.slice(1).map((e,i)=>diffDays(e.startDate,p[i].startDate)),overlap=m.filter(x=>p.some(y=>x.startDate<=y.endDate&&x.endDate>=y.startDate)).length,rel=Array.from({length:15},(_,i)=>i-7).map(r=>({r,rate:p.length?p.filter(x=>m.some(y=>inEvent(addDays(x.startDate,r),y))).length/p.length:0}));
     const stat=(t,v)=>`<section class="stat"><span>${t}</span><strong>${v}</strong></section>`;
     const fc=buildForecast(state.events,todayISO(),180);
-    return `<div class="page-intro"><h1>Trends</h1><p>Descriptive statistics and transparent forecast signals.</p></div>${state.events.length?`<div class="stats-grid">${stat('Migraine events',m.length)}${stat('Migraine duration',md.length?`${mean(md).toFixed(1)} d avg · ${median(md).toFixed(1)} d median`:'—')}${stat('Migraine interval',mi.length?`${mean(mi).toFixed(1)} d avg`:'—')}${stat('Migraine rhythm',fc.mig.spectral?.period?`${fc.mig.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Menstruation cycles',p.length)}${stat('Period duration',pd.length?`${mean(pd).toFixed(1)} d avg`:'—')}${stat('Cycle length',pi.length?`${mean(pi).toFixed(1)} d avg`:'—')}${stat('Menstruation rhythm',fc.men.spectral?.period?`${fc.men.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Overlapping migraine episodes',`${overlap}/${m.length}`)}</div><section class="trend-card"><h2>Migraine by day relative to menstruation start</h2><div class="rel-chart">${rel.map(x=>`<div class="rel-col"><div class="rel-bar" style="height:${Math.max(2,x.rate*120)}px" title="${Math.round(x.rate*100)}%"></div><span>${x.r>0?'+'+x.r:x.r}</span></div>`).join('')}</div><p class="muted">Observed relationship, not proof of causation.</p></section>`:`<section class="empty-card">Import or log confirmed events to populate trends.</section>`}</div>`;
+    return `<div class="page-intro"><h1>Trends</h1><p>Descriptive statistics and transparent forecast signals.</p></div>${state.events.length?`<div class="stats-grid">${stat('Migraine events',m.length)}${stat('Migraine duration',md.length?`${mean(md).toFixed(1)} d avg · ${median(md).toFixed(1)} d median`:'—')}${stat('Migraine interval',mi.length?`${mean(mi).toFixed(1)} d avg`:'—')}${stat('Migraine rhythm',fc.mig.spectral?.period?`${fc.mig.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Menstruation cycles',p.length)}${stat('Period duration',pd.length?`${mean(pd).toFixed(1)} d avg`:'—')}${stat('Cycle length',pi.length?`${mean(pi).toFixed(1)} d avg`:'—')}${stat('Menstruation rhythm',fc.men.spectral?.period?`${fc.men.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Overlapping migraine episodes',`${overlap}/${m.length}`)}</div><div class="fourier-grid">${fourierChart('Migraine Fourier spectrum',m.map(e=>e.startDate),fc.mig.spectral,'migraine')}${fourierChart('Menstruation Fourier spectrum',p.map(e=>e.startDate),fc.men.spectral,'menstruation')}</div><section class="trend-card"><h2>Migraine by day relative to menstruation start</h2><div class="rel-chart">${rel.map(x=>`<div class="rel-col"><div class="rel-bar" style="height:${Math.max(2,x.rate*120)}px" title="${Math.round(x.rate*100)}%"></div><span>${x.r>0?'+'+x.r:x.r}</span></div>`).join('')}</div><p class="muted">Observed relationship, not proof of causation.</p></section><section class="trend-card learning-note"><h2>How the forecast learns</h2><p>Every confirmed add, edit or delete immediately rebuilds the interval distributions, duration model, migraine-to-menstruation phase relationship and Fourier spectrum from the full current history. Recent intervals receive more weight, so new observations gradually influence the forecast more than older ones.</p><p class="muted">This is deterministic statistical learning/recalculation, not a hidden AI model. Forecast confidence rises only when more confirmed observations also become consistent.</p></section>`:`<section class="empty-card">Log confirmed events to populate trends.</section>`}</div>`;
   }
   function renderSettings(){
     const installState=state.installed?'Cycler is installed on this device.':(state.installReady?'Android install prompt is ready.':'If Chrome does not offer installation yet, reload once and use Chrome menu ⋮ → Install app / Add to Home screen.');
-    return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card install-card"><h2>Install on Android</h2><p>Install Cycler as a standalone app with its own home-screen icon. It will continue to work offline.</p><button class="primary" id="install-app-settings" ${state.installed?'disabled':''}>${state.installed?'Installed':'Install Cycler'}</button><p class="muted">${installState}</p></section><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Probability labels</h2><p><strong>M</strong> means the modelled probability that migraine is active on that date. <strong>P</strong> means the modelled probability that menstruation is active on that date.</p><p class="muted">They combine forecasted start timing with expected event duration. The forecast cards separately show the probability of the next event <em>starting</em> on the most likely date.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`;
+    return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card install-card"><h2>Install on Android</h2><p>Install Cycler as a standalone app with its own home-screen icon. It will continue to work offline.</p><button class="primary" id="install-app-settings" ${state.installed?'disabled':''}>${state.installed?'Installed':'Install Cycler'}</button><p class="muted">${installState}</p></section><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Probability labels</h2><p><strong>M</strong> means the modelled probability that migraine is active on that date. <strong>P</strong> means the modelled probability that menstruation is active on that date.</p><p class="muted">They combine forecasted start timing with expected event duration. The forecast cards separately show the probability of the next event <em>starting</em> on the most likely date.</p></section><section class="settings-card"><h2>Learning</h2><p>Every confirmed event automatically recalculates the forecast model. Newer observations are weighted more strongly while older history remains part of the model.</p><p class="muted">This includes intervals, durations, the migraine/menstruation timing relationship and the Fourier spectrum.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`;
   }
 
   function bind(fc){

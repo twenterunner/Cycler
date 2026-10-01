@@ -2,3 +2,27 @@
 
 .model-note{margin-top:9px;font-size:11px;color:#777b8e}
 \n/* v4 probability heatmap + install UI */\n.install-top{border:0;background:#24273a;color:white;font-size:12px;font-weight:800;border-radius:999px;padding:7px 10px;white-space:nowrap}.installed-badge{background:#eef1f6;color:#4f5568!important;padding:6px 9px;border-radius:999px}.probability-key{display:grid;gap:5px;background:#fff;border:1px solid #e6e7ee;border-radius:15px;padding:12px 14px;margin:13px 0 0;box-shadow:0 6px 18px rgba(35,37,52,.04);font-size:12px;color:#5d6274}.probability-key strong{color:#24273a;font-size:13px}.probability-key small{color:#7b7f90}.probability-key .m,.heat-legend .m{color:#5b45bd}.probability-key .p,.heat-legend .p{color:#c53b67}.heat-cell{transition:transform .12s ease,box-shadow .12s ease;background-clip:padding-box!important}.heat-cell:active{transform:scale(.98)}.heat-cell .day-num{background:rgba(255,255,255,.82);padding:1px 5px;border-radius:999px;box-shadow:0 1px 3px rgba(0,0,0,.06)}.prob-stack{width:100%;display:flex;flex-direction:column;gap:3px;margin-top:auto}.prob-badge{position:relative;isolation:isolate;display:block;width:100%;overflow:hidden;border-radius:5px;padding:2px 4px;background:rgba(255,255,255,.80);font-size:9px;font-weight:800;text-align:left;line-height:1.35;color:#333;box-shadow:0 1px 2px rgba(0,0,0,.05)}.prob-badge i{position:absolute;z-index:-1;left:0;bottom:0;height:2px;border-radius:2px}.prob-badge.migraine b{color:#523bb4}.prob-badge.migraine i{background:#624ac7}.prob-badge.menstruation b{color:#b8305a}.prob-badge.menstruation i{background:#cf416d}.prob-badge.strong{background:rgba(255,255,255,.92)}.heat-legend{padding:8px 4px 0;border-top:1px solid #ececf1;margin-top:10px}.install-card{border-color:#dfe2f0}.install-card .primary:disabled{background:#767b8b}.model-note{margin-top:9px;font-size:11px;color:#777b8e}\n@media(max-width:560px){.topbar{padding:10px 12px}.topbar>div:first-child span{display:none}.offline-badge{display:none}.install-top{font-size:11px;padding:6px 9px}.probability-key{font-size:11px}.day-cell{min-height:92px}.prob-badge{font-size:8.5px}.event-marks .mark{font-size:9px}}\n
+
+/* v5 probability blocks + Fourier trend charts */
+.prob-stack{gap:4px;margin-top:5px}
+.prob-badge{position:relative;z-index:1;display:flex;align-items:center;justify-content:flex-start;width:100%;min-height:22px;border-radius:7px;padding:3px 6px;font-size:9px;font-weight:850;line-height:1.2;box-shadow:inset 0 0 0 1px rgba(255,255,255,.20),0 1px 2px rgba(0,0,0,.05);text-shadow:0 1px 1px rgba(0,0,0,.05)}
+.prob-badge b{color:inherit!important;margin-right:3px}
+.prob-badge i{display:none!important}
+.prob-badge.strong{box-shadow:inset 0 0 0 1px rgba(255,255,255,.28),0 2px 4px rgba(0,0,0,.08)}
+.fourier-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.fourier-card{margin-top:0;min-width:0}
+.trend-title-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.trend-title-row h2{margin:0 0 4px}
+.fourier-peak{font-size:12px;white-space:nowrap;background:#f2f3f7;border-radius:999px;padding:6px 8px;color:#505568}
+.fourier-svg{display:block;width:100%;height:auto;margin-top:10px;overflow:visible}
+.fourier-svg .gridline{stroke:#e7e8ef;stroke-width:1}
+.fourier-svg .gridline.vertical{stroke:#f0f1f5}
+.fourier-svg .axis{stroke:#9da1af;stroke-width:1.2}
+.fourier-svg .axis-label,.fourier-svg .axis-title{fill:#777b8e;font-size:10px;font-family:inherit}
+.fourier-svg .spectrum-line{fill:none;stroke:#6650c6;stroke-width:3;stroke-linejoin:round;stroke-linecap:round}
+.fourier-card.menstruation .fourier-svg .spectrum-line{stroke:#d33f6c}
+.fourier-svg .peak-line{stroke:#24273a;stroke-width:1.2;stroke-dasharray:4 4;opacity:.65}
+.fourier-svg .peak-dot{fill:#6650c6;stroke:white;stroke-width:2}
+.fourier-card.menstruation .fourier-svg .peak-dot{fill:#d33f6c}
+.learning-note p{max-width:850px}
+@media(max-width:720px){.fourier-grid{grid-template-columns:1fr}.trend-title-row{flex-direction:column}.fourier-peak{align-self:flex-start}.prob-badge{min-height:20px;font-size:8.5px;padding:3px 5px}}

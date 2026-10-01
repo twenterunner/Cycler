@@ -41,3 +41,10 @@ Overwrite `sw.js` as well. Version 3 uses a new cache name so the updated foreca
 - M/P daily probabilities are explicitly defined in the UI.
 - Added Android PWA install button using the browser install prompt, with Chrome fallback instructions.
 - Manifest/install metadata strengthened; service worker cache bumped to v4.
+
+
+## v5
+- M% is rendered directly inside the purple probability block.
+- P% is rendered directly inside the rose probability block.
+- Trends now contains live Fourier spectra for migraine and menstruation start dates.
+- Forecasts recalculate automatically after every confirmed add/edit/delete; newer intervals are weighted more strongly.
