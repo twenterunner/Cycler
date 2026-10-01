@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2026.10.01-ensemble-v3';
+  const APP_VERSION = '2026.10.01-ensemble-v4';
   const DB_NAME = 'cycler-local-db';
   const STORE = 'events';
   const app = document.getElementById('app');
@@ -38,7 +38,37 @@
     editingId: null,
     addType: null,
     touchX: null,
+    installReady: false,
+    installed: window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true,
   };
+
+  let deferredInstallPrompt = null;
+  window.addEventListener('beforeinstallprompt', event => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    state.installReady = true;
+    if (app.innerHTML) render();
+  });
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    state.installReady = false;
+    state.installed = true;
+    if (app.innerHTML) render();
+  });
+
+  async function installApp(){
+    if(state.installed){ toast('Cycler is already installed'); return; }
+    if(deferredInstallPrompt){
+      deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      state.installReady = false;
+      if(choice && choice.outcome === 'accepted') toast('Cycler installation started');
+      render();
+      return;
+    }
+    alert('On Android Chrome, open the browser menu (⋮) and choose “Install app” or “Add to Home screen”. If that option is not shown yet, reload Cycler once and try again.');
+  }
 
   // ---------- Date helpers ----------
   function parseISO(s) {
@@ -325,13 +355,23 @@
   }
 
   // ---------- Rendering ----------
+  // Non-linear visual scale: low-but-real probabilities remain visible, while peaks become much stronger.
+  function heatAlpha(p){
+    p=clamp(p||0);
+    if(p<=0.005)return .025;
+    return clamp(.06 + .88*Math.sqrt(p), .06, .94);
+  }
+  function probabilityBadge(kind,p){
+    const pct=Math.round(clamp(p||0)*100), strong=p>=.28;
+    return `<span class="prob-badge ${kind} ${strong?'strong':''}"><b>${kind==='migraine'?'M':'P'}</b> ${pct}%<i style="width:${pct}%"></i></span>`;
+  }
   function forecastCard(s){
     const label=s.type==='migraine'?'Migraine':'Menstruation';
     return `<section class="forecast-card ${s.type}"><div class="forecast-title-row"><span class="event-dot"></span><strong>${label}</strong><span class="confidence">${s.confidence} confidence</span></div><div class="forecast-main">${s.nextLikelyStart?formatShort(s.nextLikelyStart):'Not enough data'}</div><div class="forecast-prob">${s.nextLikelyStart?`Likely start ${Math.round(s.nextStartProbability*100)}% · peak day ${Math.round(s.peakActiveProbability*100)}% on ${formatShort(s.peakActiveDate)}`:'Add more confirmed events'}</div><div class="forecast-meta"><span>Window: ${s.windowStart&&s.windowEnd?`${formatShort(s.windowStart)}–${formatShort(s.windowEnd)}`:'—'}</span><span>Duration: ${s.durationLabel}</span></div>${s.spectralPeriod?`<div class="model-note">Rhythm signal ≈ ${s.spectralPeriod.toFixed(1)} d</div>`:''}</section>`;
   }
   function render(){
     const t=todayISO(),fc=buildForecast(state.events,t,730);
-    app.innerHTML=`<div class="app-shell"><header class="topbar"><div><strong>Cycle Forecast</strong><span>Private · local-first · ${APP_VERSION}</span></div><span class="offline-badge">Offline ready</span></header><main id="main"></main><nav class="bottom-nav">${[['today','●','Today'],['calendar','▦','Calendar'],['trends','⌁','Trends'],['settings','⚙','Settings']].map(([id,ic,l])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span>${ic}</span>${l}</button>`).join('')}</nav></div>`;
+    app.innerHTML=`<div class="app-shell"><header class="topbar"><div><strong>Cycle Forecast</strong><span>Private · local-first · ${APP_VERSION}</span></div><div class="top-actions">${!state.installed?'<button class="install-top" id="install-app">Install app</button>':'<span class="installed-badge">Installed</span>'}<span class="offline-badge">Offline ready</span></div></header><main id="main"></main><nav class="bottom-nav">${[['today','●','Today'],['calendar','▦','Calendar'],['trends','⌁','Trends'],['settings','⚙','Settings']].map(([id,ic,l])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span>${ic}</span>${l}</button>`).join('')}</nav></div>`;
     const main=document.getElementById('main');
     if(state.tab==='today') main.innerHTML=renderToday(t,fc);
     if(state.tab==='calendar') main.innerHTML=renderCalendar(t,fc);
@@ -351,8 +391,13 @@
   }
   function renderCalendar(t,fc){
     const dates=visibleDates(),title=state.calendarMode==='month'?formatMonth(state.cursor):formatLong(state.cursor);
-    const cells=dates.map(d=>{const p=fc.daily.get(d)||{migraineProbability:0,menstruationProbability:0},inMonth=d.slice(0,7)===state.cursor.slice(0,7),dayEvents=state.events.filter(e=>inEvent(d,e)),m=p.migraineProbability||0,s=p.menstruationProbability||0,bg=`linear-gradient(135deg,rgba(114,87,213,${.05+.22*m}) 0 48%,rgba(220,91,131,${.05+.22*s}) 52% 100%)`;return `<button class="day-cell ${!inMonth&&state.calendarMode==='month'?'dim':''} ${d===t?'today':''}" data-date="${d}" style="background:${bg}"><span class="day-num">${Number(d.slice(8))}</span><div class="event-marks">${dayEvents.some(e=>e.type==='migraine')?'<span class="mark migraine">● M</span>':''}${dayEvents.some(e=>e.type==='menstruation')?'<span class="mark menstruation">● P</span>':''}</div>${!dayEvents.some(e=>e.type==='migraine')?`<span class="mini">M ${Math.round(m*100)}%</span>`:''}${!dayEvents.some(e=>e.type==='menstruation')?`<span class="mini">P ${Math.round(s*100)}%</span>`:''}</button>`;}).join('');
-    return `<div class="page-intro"><h1>Calendar</h1><p>Confirmed events and probability forecasts.</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><section class="calendar-card" id="calendar-card"><div class="calendar-toolbar"><div class="segmented"><button data-mode="week" class="${state.calendarMode==='week'?'active':''}">Week</button><button data-mode="month" class="${state.calendarMode==='month'?'active':''}">Month</button></div><strong>${title}</strong><div class="nav-buttons"><button data-nav="-1">‹</button><button data-nav="today">Today</button><button data-nav="1">›</button></div></div><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid ${state.calendarMode}">${cells}</div><div class="legend"><span><b class="m">● M</b> confirmed migraine</span><span><b class="p">● P</b> confirmed menstruation</span></div><p class="calendar-hint">Swipe or use the arrows to move through time. Percentages are forecasts; confirmed observations override forecasts.</p></section>`;
+    const cells=dates.map(d=>{
+      const p=fc.daily.get(d)||{migraineProbability:0,menstruationProbability:0},inMonth=d.slice(0,7)===state.cursor.slice(0,7),dayEvents=state.events.filter(e=>inEvent(d,e)),m=p.migraineProbability||0,s=p.menstruationProbability||0;
+      const ma=heatAlpha(m),pa=heatAlpha(s);
+      const bg=`linear-gradient(to bottom,rgba(88,65,190,${ma}) 0%,rgba(88,65,190,${ma}) 47%,rgba(255,255,255,.92) 48%,rgba(255,255,255,.92) 52%,rgba(213,57,105,${pa}) 53%,rgba(213,57,105,${pa}) 100%)`;
+      return `<button class="day-cell heat-cell ${!inMonth&&state.calendarMode==='month'?'dim':''} ${d===t?'today':''}" data-date="${d}" style="background:${bg}"><span class="day-num">${Number(d.slice(8))}</span><div class="event-marks">${dayEvents.some(e=>e.type==='migraine')?'<span class="mark migraine">● Migraine</span>':''}${dayEvents.some(e=>e.type==='menstruation')?'<span class="mark menstruation">● Period</span>':''}</div><div class="prob-stack">${!dayEvents.some(e=>e.type==='migraine')?probabilityBadge('migraine',m):''}${!dayEvents.some(e=>e.type==='menstruation')?probabilityBadge('menstruation',s):''}</div></button>`;
+    }).join('');
+    return `<div class="page-intro"><h1>Calendar</h1><p>Confirmed events and daily probability forecasts.</p></div><div class="forecast-grid">${forecastCard(fc.mig.summary)}${forecastCard(fc.men.summary)}</div><section class="probability-key"><strong>What do M and P mean?</strong><span><b class="m">M</b> = probability of having migraine at some point on that date.</span><span><b class="p">P</b> = probability of menstruating on that date.</span><small>These are daily active-event probabilities, not the probability that an event starts that day. Darker colour = higher probability.</small></section><section class="calendar-card" id="calendar-card"><div class="calendar-toolbar"><div class="segmented"><button data-mode="week" class="${state.calendarMode==='week'?'active':''}">Week</button><button data-mode="month" class="${state.calendarMode==='month'?'active':''}">Month</button></div><strong>${title}</strong><div class="nav-buttons"><button data-nav="-1">‹</button><button data-nav="today">Today</button><button data-nav="1">›</button></div></div><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<span>${x}</span>`).join('')}</div><div class="calendar-grid ${state.calendarMode}">${cells}</div><div class="legend heat-legend"><span><b class="m">Purple</b> migraine probability</span><span><b class="p">Rose</b> menstruation probability</span><span>Colour intensity follows probability non-linearly so peaks stand out.</span></div><p class="calendar-hint">Swipe or use the arrows to move through time. Confirmed observations override forecasts.</p></section>`;
   }
   function renderTrends(){
     const m=state.events.filter(e=>e.type==='migraine').sort((a,b)=>a.startDate.localeCompare(b.startDate)),p=state.events.filter(e=>e.type==='menstruation').sort((a,b)=>a.startDate.localeCompare(b.startDate)),md=m.map(durationDays),pd=p.map(durationDays),mi=m.slice(1).map((e,i)=>diffDays(e.startDate,m[i].startDate)),pi=p.slice(1).map((e,i)=>diffDays(e.startDate,p[i].startDate)),overlap=m.filter(x=>p.some(y=>x.startDate<=y.endDate&&x.endDate>=y.startDate)).length,rel=Array.from({length:15},(_,i)=>i-7).map(r=>({r,rate:p.length?p.filter(x=>m.some(y=>inEvent(addDays(x.startDate,r),y))).length/p.length:0}));
@@ -360,9 +405,14 @@
     const fc=buildForecast(state.events,todayISO(),180);
     return `<div class="page-intro"><h1>Trends</h1><p>Descriptive statistics and transparent forecast signals.</p></div>${state.events.length?`<div class="stats-grid">${stat('Migraine events',m.length)}${stat('Migraine duration',md.length?`${mean(md).toFixed(1)} d avg · ${median(md).toFixed(1)} d median`:'—')}${stat('Migraine interval',mi.length?`${mean(mi).toFixed(1)} d avg`:'—')}${stat('Migraine rhythm',fc.mig.spectral?.period?`${fc.mig.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Menstruation cycles',p.length)}${stat('Period duration',pd.length?`${mean(pd).toFixed(1)} d avg`:'—')}${stat('Cycle length',pi.length?`${mean(pi).toFixed(1)} d avg`:'—')}${stat('Menstruation rhythm',fc.men.spectral?.period?`${fc.men.spectral.period.toFixed(1)} d Fourier`:'—')}${stat('Overlapping migraine episodes',`${overlap}/${m.length}`)}</div><section class="trend-card"><h2>Migraine by day relative to menstruation start</h2><div class="rel-chart">${rel.map(x=>`<div class="rel-col"><div class="rel-bar" style="height:${Math.max(2,x.rate*120)}px" title="${Math.round(x.rate*100)}%"></div><span>${x.r>0?'+'+x.r:x.r}</span></div>`).join('')}</div><p class="muted">Observed relationship, not proof of causation.</p></section>`:`<section class="empty-card">Import or log confirmed events to populate trends.</section>`}</div>`;
   }
-  function renderSettings(){ return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`; }
+  function renderSettings(){
+    const installState=state.installed?'Cycler is installed on this device.':(state.installReady?'Android install prompt is ready.':'If Chrome does not offer installation yet, reload once and use Chrome menu ⋮ → Install app / Add to Home screen.');
+    return `<div class="page-intro"><h1>Settings</h1><p>Data stays in this browser unless you export it yourself.</p></div><section class="settings-card install-card"><h2>Install on Android</h2><p>Install Cycler as a standalone app with its own home-screen icon. It will continue to work offline.</p><button class="primary" id="install-app-settings" ${state.installed?'disabled':''}>${state.installed?'Installed':'Install Cycler'}</button><p class="muted">${installState}</p></section><section class="settings-card"><h2>Data</h2><button class="primary" id="export-json">Export JSON</button><button class="secondary" id="import-json">Import JSON</button><input class="file-input" id="import-file" type="file" accept="application/json"><button class="secondary" id="load-shared-history">Load initial shared history</button><button class="danger-btn" id="clear-data">Clear all data</button><p class="muted">Private health exports should not be committed to a public GitHub repository.</p></section><section class="settings-card"><h2>Probability labels</h2><p><strong>M</strong> means the modelled probability that migraine is active on that date. <strong>P</strong> means the modelled probability that menstruation is active on that date.</p><p class="muted">They combine forecasted start timing with expected event duration. The forecast cards separately show the probability of the next event <em>starting</em> on the most likely date.</p></section><section class="settings-card"><h2>Privacy & limits</h2><p>No telemetry, analytics, accounts or server storage. Forecasts are statistical estimates from confirmed events and are not medical advice.</p><p class="code-note">Deployment: direct static files from GitHub Pages main / root. No build step or GitHub Actions required.</p></section>`;
+  }
 
   function bind(fc){
+    const installTop=document.getElementById('install-app'); if(installTop)installTop.onclick=installApp;
+    const installSettings=document.getElementById('install-app-settings'); if(installSettings)installSettings.onclick=installApp;
     document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;state.selectedDate=null;state.editingId=null;state.addType=null;render();});
     document.querySelectorAll('[data-log]').forEach(b=>b.onclick=()=>quickLog(b.dataset.log));
     document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.edit;render();});
@@ -384,7 +434,7 @@
   // ---------- Sheets ----------
   function openDaySheet(date,fc){
     const e=state.events.filter(x=>inEvent(date,x)),p=fc.daily.get(date)||{migraineProbability:0,menstruationProbability:0};
-    const node=document.createElement('div');node.className='modal-backdrop';node.innerHTML=`<section class="sheet"><div class="sheet-head"><div><h2>${formatLong(date)}</h2><p class="muted">Confirmed observations override forecasts.</p></div><button class="icon-btn" id="close-day">×</button></div>${e.length?`<div class="confirmed-list">${e.map(x=>`<button class="confirmed-item ${x.type}" data-sheet-edit="${x.id}">● ${x.type==='migraine'?'Migraine':'Menstruation'} · edit</button>`).join('')}</div>`:''}<div class="add-row"><button class="secondary" data-add="migraine">+ Migraine</button><button class="secondary" data-add="menstruation">+ Menstruation</button></div><div class="prob-detail"><strong>Migraine</strong><span>${Math.round(p.migraineProbability*100)}%</span></div><ul class="reason-list">${reasons('migraine',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul><div class="prob-detail"><strong>Menstruation</strong><span>${Math.round(p.menstruationProbability*100)}%</span></div><ul class="reason-list">${reasons('menstruation',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section>`;
+    const node=document.createElement('div');node.className='modal-backdrop';node.innerHTML=`<section class="sheet"><div class="sheet-head"><div><h2>${formatLong(date)}</h2><p class="muted">Confirmed observations override forecasts.</p></div><button class="icon-btn" id="close-day">×</button></div>${e.length?`<div class="confirmed-list">${e.map(x=>`<button class="confirmed-item ${x.type}" data-sheet-edit="${x.id}">● ${x.type==='migraine'?'Migraine':'Menstruation'} · edit</button>`).join('')}</div>`:''}<div class="add-row"><button class="secondary" data-add="migraine">+ Migraine</button><button class="secondary" data-add="menstruation">+ Menstruation</button></div><div class="prob-detail"><strong>Migraine active on this date</strong><span>${Math.round(p.migraineProbability*100)}%</span></div><ul class="reason-list">${reasons('migraine',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul><div class="prob-detail"><strong>Menstruating on this date</strong><span>${Math.round(p.menstruationProbability*100)}%</span></div><ul class="reason-list">${reasons('menstruation',date,fc).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section>`;
     node.onclick=e2=>{if(e2.target===node){state.selectedDate=null;render();}};document.body.appendChild(node);
     node.querySelector('#close-day').onclick=()=>{state.selectedDate=null;render();};
     node.querySelectorAll('[data-sheet-edit]').forEach(b=>b.onclick=()=>{state.editingId=b.dataset.sheetEdit;state.selectedDate=null;render();});

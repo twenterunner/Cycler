@@ -33,3 +33,11 @@ The dates supplied for the initial 2026 history are now bundled into `app.js`. O
 ## Cache upgrade
 
 Overwrite `sw.js` as well. Version 3 uses a new cache name so the updated forecast/UI is picked up rather than an older cached build.
+
+## v4 changes
+
+- Stronger split heatmap: purple = migraine probability, rose = menstruation probability.
+- Non-linear colour intensity makes forecast peaks visible even when absolute probabilities are moderate.
+- M/P daily probabilities are explicitly defined in the UI.
+- Added Android PWA install button using the browser install prompt, with Chrome fallback instructions.
+- Manifest/install metadata strengthened; service worker cache bumped to v4.
