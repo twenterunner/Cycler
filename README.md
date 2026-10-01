@@ -58,3 +58,10 @@ On current Samsung Internet versions, Play Protect may block the browser-generat
 ## Performance
 
 Forecast calculations are cached and are only rebuilt when confirmed event data changes or the date anchor changes. Calendar taps and navigation reuse the cached model; event persistence is performed after the UI has updated.
+
+
+## v10 forecast
+
+The forecast now uses a conditional renewal/hazard-style model with a robust heavy-tailed interval distribution. Recency weighting is selected using rolling historical validation. Fourier timing is only a bounded modifier and gains influence when it improves held-out historical forecasts. Migraine can also use a shrunk menstruation-phase signal. Confirmed duration is folded into start timing to generate the displayed daily M/P probabilities.
+
+The normal UI is intentionally simple: daily probabilities in Today/Calendar, plus a 7-day or 30-day probability outlook in Trends.

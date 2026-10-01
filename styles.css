@@ -54,3 +54,23 @@
 /* v9 responsiveness */
 button,[role=button]{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .day-cell,.bottom-nav button,.segmented button,.nav-buttons button{will-change:auto}
+
+
+/* v10 cleaner daily-probability UI + probability outlook */
+.today-prob{position:relative;overflow:hidden}
+.today-prob.migraine{border-top:4px solid #6550c7}
+.today-prob.menstruation{border-top:4px solid #d54873}
+.today-prob-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.today-prob-head h3{margin:0}
+.today-prob-head strong{font-size:30px;line-height:1}
+.today-prob.migraine .today-prob-head strong{color:#5944b5}
+.today-prob.menstruation .today-prob-head strong{color:#bd365f}
+.outlook-card{padding:14px 14px 8px}
+.outlook-svg{width:100%;height:auto;display:block;overflow:visible}
+.outlook-line{fill:none;stroke-width:3.1;stroke-linecap:round;stroke-linejoin:round}
+.outlook-line.migraine{stroke:#624ac7}.outlook-line.menstruation{stroke:#d13e6c}
+.outlook-dot{stroke:#fff;stroke-width:1.2}.outlook-dot.migraine{fill:#624ac7}.outlook-dot.menstruation{fill:#d13e6c}
+.outlook-legend{display:flex;gap:16px;justify-content:center;font-size:12px;font-weight:800;padding:0 0 7px}
+.outlook-legend .migraine{color:#5944b5}.outlook-legend .menstruation{color:#bd365f}
+.segmented.compact{flex:0 0 auto}.model-learning-short{text-align:center;margin:14px auto 2px;max-width:720px}
+@media(max-width:560px){.today-prob-head strong{font-size:27px}.outlook-card{padding:10px 8px 6px}.trend-title-row{gap:8px;align-items:flex-start}.segmented.compact button{padding:6px 7px;font-size:11px}.outlook-line{stroke-width:3.5}}
